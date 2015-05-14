@@ -66,7 +66,10 @@ struct CloseBinaryPropagator {
 		:_params(p),sys(s),calcForces(calc){}
 
 	__device__ bool is_in_body_component_grid()
-        { return  ( (b != 0) && (b < nbod) && (c < 3)); }	
+        { return  ( (b < nbod) && (c < 3)); }
+
+  	__device__ bool is_in_body_component_grid_no_prim()
+        { return  ( (b != 0) && (b < nbod) && (c < 3)); }
 
 	__device__ bool is_in_body_component_grid_no_star()
         { return ( (b > 1) && (b < nbod) && (c < 3) ); }	
@@ -444,7 +447,7 @@ struct CloseBinaryPropagator {
 	    ///Repeat NBin Times:
 	    for(int NStep = 0; NStep < NBin; NStep++)
 	      {
-		if (is_in_body_component_grid())
+		if (is_in_body_component_grid_no_prim())
 		  {
 		    //Advance H, Star B Interaction by (0.5 * timestep) / NBin
 		    sys[b][c].vel() += h/2.0/NBin*calcForces.acc_binary_cb(ij,b,c);
@@ -470,7 +473,7 @@ struct CloseBinaryPropagator {
 	    __syncthreads();
 	    
 	    ///Advance H, Jump by 0.5 * timestep
-	    	    if (is_in_body_component_grid_no_star())
+	    if (is_in_body_component_grid_no_star())
 	      {
 		sys[b][c].pos() += h/2.0/MBin * mvsum(c);
 	      }
@@ -482,7 +485,7 @@ struct CloseBinaryPropagator {
 		//Advance H, Star B Kep by (0.5 * timestep) / NBin
 		drift_kepler(sys[1][0].pos(), sys[1][1].pos(), sys[1][2].pos(), sys[1][0].vel(), sys[1][1].vel(), sys[1][2].vel(), sqrtGM, h/2.0/NBin*MBin/sys[0].mass());
 		
-		if (is_in_body_component_grid())
+		if (is_in_body_component_grid_no_prim())
 		  {
 		    //Advance H, Star B Interaction by (0.5 * timestep) / NBin
 		    sys[b][c].vel() += h/2.0/NBin*calcForces.acc_binary_cb(ij,b,c);
@@ -495,6 +498,8 @@ struct CloseBinaryPropagator {
 	      {
 		sys[b][c].vel() += h/2.0 * calcForces.acc_planets_cb(ij,b,c);
 	      }
+
+	    __syncthreads();
 
 	    // Advance time for first thread
 	    if( is_first_thread_in_system() ) 
