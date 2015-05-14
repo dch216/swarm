@@ -7,6 +7,7 @@
 #include "swarm/common.hpp"
 #include "swarm/swarmplugin.h"
 #include "keplerian.hpp"
+#include <math.h>
 
 namespace swarm {
 
@@ -45,9 +46,19 @@ struct CloseBinaryPropagator {
 	int c;
 	int ij;
 
+        //Note: Using kepcoords class with members .sma(), .ecc(), .inc(), .lon(), .arg(), .man()
+        //	for both star B and the planets. To initialize or compute new keplerian coordinates,
+	//	give member function .calc_coords() a single parameter - its body number (var 'b').
+	//	It has access to global sys class.
+        kepcoords kep_planet_b[nbod-2];
+	kepcoords kep_star_B;
+
 	double sqrtGM;
+        double MBin;
 	double max_timestep;
-	double acc_bc;
+	double acc_bc[nbod-2];
+
+        int NBin;
 
         //! Constructor for CloseBinaryPropagator
 	GPUAPI CloseBinaryPropagator(const params& p,ensemble::SystemRef& s,
@@ -55,10 +66,10 @@ struct CloseBinaryPropagator {
 		:_params(p),sys(s),calcForces(calc){}
 
 	__device__ bool is_in_body_component_grid()
-        { return  ((b < nbod) && (c < 3)); }	
+        { return  ( (b != 0) && (b < nbod) && (c < 3)); }	
 
 	__device__ bool is_in_body_component_grid_no_star()
-        { return ( (b!=0) && (b < nbod) && (c < 3) ); }	
+        { return ( (b > 1) && (b < nbod) && (c < 3) ); }	
 
 	__device__ bool is_first_thread_in_system()
         { return (thread_in_system()==0); }	
@@ -76,12 +87,25 @@ struct CloseBinaryPropagator {
 	/// Shift into Jacobi coordinate system 
 	/// Initialization tasks executed before entering loop
         /// Cache sqrtGM, shift coord system, cache acceleration data for this thread's body and component
-	GPUAPI void init()  { 
-		sqrtGM = sqrt(sys[0].mass());
+	GPUAPI void init()  {
+	        MBin = sys[0].mass() + sys[1].mass();
+		sqrtGM = sqrt(sys[0].mass() * sys[1].mass() / MBin);
 		convert_std_to_jacobi_coord_without_shared();
 		__syncthreads();
-		acc_bc = calcForces.acc_planets(ij,b,c);
-                }
+		if (is_in_body_component_grid_no_star())
+		  {
+		    //initialize Keplarian coordinates for planet_b:
+		    kep_planet_b[b-2].init(b);
+		  }
+		__syncthreads();
+		
+		//initialize Keplarian coordinates for star_B:
+	       	kep_star_B.init(1);
+
+		//Determine NBin using semi-major axes
+		NBin = int(0.5 + pow((min_sma() / calc_sma(1)), 1.5))
+
+	}
 
 	/// Before exiting, convert back to standard cartesian coordinate system
 	GPUAPI void shutdown() { 
@@ -357,64 +381,124 @@ struct CloseBinaryPropagator {
 	    sys[b][2].vel() = vz;
 	  }
 
+        //Calculate semi-major axis of object using energy
+          GPUAPI double calc_sma(int b)
+	  {
+	    double r, v2, sma;
+	    double x, y, z, vx, vy, vz;
+
+	    x = sys[b][0].pos();
+	    y = sys[b][1].pos();
+	    z = sys[b][2].pos();
+	    vx = sys[b][0].vel();
+	    vy = sys[b][1].vel();
+	    vz = sys[b][2].vel();
+
+	    r = sqrt(x*x + y*y + z*z);
+	    v2 = vx*vx + vy*vy + vz*vz;
+	    return sqrtGM*sqrtGM * r / (2.0 * sqrtGM * sqrtGM - r * v2);
+	  }
+
+  	//Return minimum semi-major 
+	  GPUAPI double min_sma()
+	  {
+	    double temp, minsma = 1.0e30;
+	    
+	    //Calculate individual sma
+            for (int b = 2; b < nbod; b++)
+	      {
+		temp = calc_sma(b);
+		if (temp < minsma)
+		  minsma = temp;
+	      }
+	    return minsma;
+	  }
+
+        //Return component sum of momentum
+          GPUAPI double mvsum(int c)
+	  {
+	    double mv = 0.0;
+	    for (int b = 2; b < nbod; b++)
+	      {
+		mv += sys[b].mass() * sys[b][c].vel();
+	      }
+	    return mv;
+	  }
+
 	// Advance system by one time unit
 	  GPUAPI void advance()
 	  {
-	    //Note: Using kepcoords class with members .sma(), .ecc(), .inc(), .lon(), .arg(), .man()
-	    //		for both star B and the planets. To initialize or compute new keplerian coordinates,
-	    //		give member function .calc_coords() a single parameter - its body number (var 'b').
-	    //		It has access to global sys class.
-	    kepcoords kep_planet_b;
-	    kepcoords kep_star_B;
-	    
-	    //initialize planet_b and star_B:
-	    kep_planet_b.init(b);
-	    kep_star_B.init(1);
-	    
+	    double h = min(_params.time_step, max_timestep);
+
 	    //Steps from John Chamber's Close Binary Propagator outlined in "N-Body Integrators for Planets in Binary Star Systems",
 	    //arXiv: 07053223v1
-	    
+
+    
 	    ///Advance H, Planet Interaction by 0.5 * timestep
-	    if (b!=1)
+	    if (is_in_body_component_grid_no_star())
 	      {
-		acc_bc = calcForces.acc_planets(ij,b,c);
+		sys[b][c].vel() += h/2.0 * calcForces.acc_planets_cb(ij,b,c);
 	      }
 	    
 	    __syncthreads();
 	    ///Repeat NBin Times:
-	    if (b==1)
+	    for(int NStep = 0; NStep < NBin; NStep++)
 	      {
-		for(int NStep = 0; NStep < NBin; NStep++)
+		if (is_in_body_component_grid())
 		  {
 		    //Advance H, Star B Interaction by (0.5 * timestep) / NBin
-		    
-		    //Advance H, Star B Kep by (0.5 * timestep) / NBin
+		    sys[b][c].vel() += h/2.0/NBin*calcForces.acc_binary_cb(ij,b,c);
 		  }
+		
+		    //Advance H, Star B Kep by (0.5 * timestep) / NBin
+		drift_kepler(sys[1][0].pos(), sys[1][1].pos(), sys[1][2].pos(), sys[1][0].vel(), sys[1][1].vel(), sys[1][2].vel(), sqrtGM, h/2.0/NBin*MBin/sys[0].mass());	  
 	      }
+	    __syncthreads();
+	    
 	    ///Advance H, Jump by 0.5 * timestep
+	    if (is_in_body_component_grid_no_star())
+	      {
+		sys[b][c].pos() += h/2.0/MBin * mvsum(c);
+	      }
+	    __syncthreads();
 	    
 	    ///Advance H, Planet Kep by timestep
-	    if (b!=1)
+	    if (is_in_body_component_grid_no_star())
 	      {
-		
+		drift_kepler(sys[b][0].pos(), sys[b][1].pos(), sys[b][2].pos(), sys[b][0].vel(), sys[b][1].vel(), sys[b][2].vel(), sqrt(MBin), h);
 	      }
+	    __syncthreads();
+	    
 	    ///Advance H, Jump by 0.5 * timestep
+	    	    if (is_in_body_component_grid_no_star())
+	      {
+		sys[b][c].pos() += h/2.0/MBin * mvsum(c);
+	      }
+	    __syncthreads();
 	    
 	    ///Repeat NBin Times:
-	    if (b==1)
+	    for(int NStep = 0; NStep < NBin; NStep++)
 	      {
-		for(int NStep = 0; NStep < NBin; NStep++)
-		  {
-		    //Advance H, Star B Kep by (0.5 * timestep) / NBin
-		    
-		    //Advance H, Star B Interaction by (0.5 * timestep) / NBin
-		  }
-	      }
-	    ///Advance H, Planet Interaction by 0.5 * timestep
-	    if (b!=1)
-	      {
+		//Advance H, Star B Kep by (0.5 * timestep) / NBin
+		drift_kepler(sys[1][0].pos(), sys[1][1].pos(), sys[1][2].pos(), sys[1][0].vel(), sys[1][1].vel(), sys[1][2].vel(), sqrtGM, h/2.0/NBin*MBin/sys[0].mass());
 		
+		if (is_in_body_component_grid())
+		  {
+		    //Advance H, Star B Interaction by (0.5 * timestep) / NBin
+		    sys[b][c].vel() += h/2.0/NBin*calcForces.acc_binary_cb(ij,b,c);
+		  }  
 	      }
+	    __syncthreads();
+	    
+	    ///Advance H, Planet Interaction by 0.5 * timestep
+	    if (is_in_body_component_grid_no_star())
+	      {
+		sys[b][c].vel() += h/2.0 * calcForces.acc_planets_cb(ij,b,c);
+	      }
+
+	    // Advance time for first thread
+	    if( is_first_thread_in_system() ) 
+	      sys.time() += h;
 	  }
 };
   

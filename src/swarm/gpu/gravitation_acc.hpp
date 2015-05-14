@@ -113,6 +113,46 @@ class GravitationAcc {
 		return acc_sum;
 	}
 
+  	GPUAPI double sum_acc_planets_cb(int b,int c)const{
+		double acc_sum = 0;
+
+		/// Ignore contributions from two stars
+#pragma unroll
+		for(int d = 0; d < pair_count; d++){
+			int x = first<nbod>(d), y= second<nbod>(d);
+
+			if(x == b){
+				if(y > 1)
+					acc_sum += shared[d][c].acc() * sys[y].mass();
+			}else if(y == b){
+				if(x > 1)
+					acc_sum -= shared[d][c].acc() * sys[x].mass();
+			}
+		}
+
+		return acc_sum;
+	}
+
+    	GPUAPI double sum_acc_binary_cb(int b,int c)const{
+		double acc_sum = 0;
+
+		/// ONLY include contributions from two stars
+#pragma unroll
+		for(int d = 0; d < pair_count; d++){
+			int x = first<nbod>(d), y= second<nbod>(d);
+
+			if(x == b){
+				if(y < 2)
+					acc_sum += shared[d][c].acc() * sys[y].mass();
+			}else if(y == b){
+				if(x < 2)
+					acc_sum -= shared[d][c].acc() * sys[x].mass();
+			}
+		}
+
+		return acc_sum;
+	}
+
 	GPUAPI double sum_acc(int b,int c) const{
 		double acc_from_planets = 0;
 		double acc_from_sun = 0;
@@ -178,6 +218,53 @@ class GravitationAcc {
 			return 0;
 	}
 
+  	/**
+	 * Different version of acceleration calculation used for 
+	 * closebinary integrator. The impacts of body 0 and 1 (binary stars) are 
+	 * ignored because they are calculated and applied separately.
+	 * ij, b and c are calculated from thread id.
+	 *
+	 * @ij The pair number for this tread.
+	 * @b  The planet number for this thread.
+	 * @c  coordinate number x:0,y:1,z:2
+	 * @pos position for this planet's coordinate
+	 * @vel velocity for this planet's coordinate
+	 *
+	 */
+	GPUAPI double acc_planets_cb (int ij,int b,int c)const{
+		if(ij < pair_count)
+			calc_pair(ij);
+		__syncthreads();
+		if(b < nbod && c < 3){
+			return sum_acc_planets_cb(b,c);
+		}else
+			return 0;
+	}
+  
+        /**
+  	 * Different version of acceleration calculation used for 
+	 * closebinary integrator. Only the impacts of body 0 and 1 (binary stars) are 
+	 * considered since the components from the other planets
+         * are calculated and applied separately.
+	 * ij, b and c are calculated from thread id.
+	 *
+	 * @ij The pair number for this tread.
+	 * @b  The planet number for this thread.
+	 * @c  coordinate number x:0,y:1,z:2
+	 * @pos position for this planet's coordinate
+	 * @vel velocity for this planet's coordinate
+	 *
+	 */
+	GPUAPI double acc_binary_cb (int ij,int b,int c)const{
+		if(ij < pair_count)
+			calc_pair(ij);
+		__syncthreads();
+		if(b < nbod && c < 3){
+			return sum_acc_binary_cb(b,c);
+		}else
+			return 0;
+	}
+
 	/**
 	 * Run the complete algorithm for computing acceleration only 
 	 * on all bodies. This is tightly coupled with the
@@ -218,5 +305,8 @@ class GravitationAcc {
 };
 
 } } } // end of namespace bppt :: gpu :: swarm
+
+
+
 
 
