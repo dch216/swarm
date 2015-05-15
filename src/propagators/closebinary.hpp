@@ -120,7 +120,7 @@ struct CloseBinaryPropagator {
 	    double stdcoord_A,stdcoord_B;
 		double sum_masspos = 0., sum_mom = 0., mtot = 0.;
 		double mA = 0., mB = 0., nuA = 0., nuB = 0., momA = 0., momB = 0.;
-		double jacobipos[nbod] = 0., jacobimom[nbod] = 0.;
+		double jacobipos[nbod][3] = 0., jacobimom[nbod][3] = 0.;
 		if( is_in_body_component_grid() )
 		{
 			//convert Binary Element A's position over to Jacobi
@@ -145,31 +145,33 @@ struct CloseBinaryPropagator {
 			mtot += mA + mB; //add in star mass to total mass
 			
 			//calculate jacobi position of star A, B and the planet:
-			jacobipos[0] = (sum_masspos + stdcoord_A*mA + stdcoord_B*mB)/mtot;
-			jacobipos[1] = stdcoord_B - stdcoord_A;
-			jacobipos[b] = sys[b][c].pos() - (nuA*stdcoord_A + nuB*stdcoord_B);
+			jacobipos[0][c] = (sum_masspos + stdcoord_A*mA + stdcoord_B*mB)/mtot;
+			jacobipos[1][c] = stdcoord_B - stdcoord_A;
+			jacobipos[b][c] = sys[b][c].pos() - (nuA*stdcoord_A + nuB*stdcoord_B);
 			
 			//calculate jacobi/conjugate momenta of the stars A and B, and the planet's:
-			jacobimom[0] = momA + momB + sum_mom;
-			jacobimom[1] = momB - nuB * (momA - momB);
-			jacobimom[b] = sys[b].mass() * sys[b][c].vel() - sys[b].mass()*(momA + momB + sum_mom)/mtot;
-	
-			}
+			jacobimom[0][c] = momA + momB + sum_mom;
+			jacobimom[1][c] = momB - nuB * (momA - momB);
+			jacobimom[b][c] = sys[b].mass() * sys[b][c].vel() - sys[b].mass()*(momA + momB + sum_mom)/mtot;
 		}
+		
 		__syncthreads();
 
-		if( is_in_body_component_grid() )
-		{
-			sys[b][c].pos() = jacobipos[b]; //Finally switch to jacobi coordinates.
-			sys[b][c].vel() = jacobimom / sys[b].mass(); // Coord transforms are done in momentum space. Saving velocity
-		}
+		if (is_in_body_component_grid())
+		  {
+		    sys[b][c].pos() = jacobipos[b]; //Finally switch to jacobi coordinates.
+		    sys[b][c].vel() = jacobimom[b] / sys[b].mass(); // Coord transforms are done in momentum space. Saving velocity
+		  }
+		
+		__syncthreads();
+		
 	}
 
 	///Convert back to Cartesian, from Jacobi
 	GPUAPI void convert_jacobi_to_std_coord_without_shared()  { 
 		
-		double JPos_A = sys[0][c].pos(),
-			   JPos_B = sys[1][c].pos(),
+		double JPos_A = 0.,
+			   JPos_B = 0.,
 			   mA = sys[0].mass(),
 			   mB = sys[1].mass(),
 			   mplan = 0.,
@@ -180,15 +182,14 @@ struct CloseBinaryPropagator {
 			   momA = 0.,
 			   momB =0.,
 			   sum_mom = 0.;
-		double CartCoord_A = 0.,
-			   CartCoord_B = 0.,
-			   CartCoord_planet = 0.,
-			   StdMom_A = 0.,
-			   StdMom_B = 0.,
-			   StdMom_planet = 0.;
+		double CartCoord[nbod][3] = 0.,
+			   StdMom[nbod][3] = 0.,
 			   
 		if( is_in_body_component_grid() )
 		{
+		  JPos_A = sys[0][c].pos();
+		  JPos_B = sys[1][c].pos();
+		  
 			//Calculate SUM(mj*Jj)
 			for(int j = 2;j<nbod;j++)
 			{
@@ -199,29 +200,24 @@ struct CloseBinaryPropagator {
 			mtot = mA + mB + mplan;
 			
 			//Calculate Cartesian Coordinates:
-			CartCoord_A = (JPos_A*mtot - (mB +mplan*nuB)*JPos_B - sum_masspos) / (mA + mB + mplan*(nuA + nuB));
-			CartCoord_B = JPos_B + CartCoord_A;
-			CartCoord_planet = sys[b][c].pos() + nuA*CartCoord_A + nuB*CartCoord_B;
+			CartCoord[0][c] = (JPos_A*mtot - (mB +mplan*nuB)*JPos_B - sum_masspos) / (mA + mB + mplan*(nuA + nuB));
+			CartCoord[1][c] = JPos_B + CartCoord[0][c];
+			CartCoord[b][c] = sys[b][c].pos() + nuA*CartCoord[0][c] + nuB*CartCoord[1][c];
 			
 			//calculate Momenta in Cartesian Coords
-			StdMom_A = (1.0 - nuB) * ((1.0-mplan/mtot)*sys[0][c].vel()*mA - sum_mom - (sys[1][c].vel()*mB)/(1.0-nuB));
-			StdMom_B = (sys[1][c].vel()*mB + nuB*StdMom_A)/(1.0-nuB);
-			StdMom_planet = sys[b][c].vel()*sys[b].mass() + (sys[b].mass/mtot)*sys[0][c].vel()*mA;
+			StdMom[0][c] = (1.0 - nuB) * ((1.0-mplan/mtot)*sys[0][c].vel()*mA - sum_mom - (sys[1][c].vel()*mB)/(1.0-nuB));
+			StdMom[1][c] = (sys[1][c].vel()*mB + nuB*StdMom[0][c])/(1.0-nuB);
+			StdMom[b][c] = sys[b][c].vel()*sys[b].mass() + (sys[b].mass/mtot)*sys[0][c].vel()*mA;
 			
 		}
 		__syncthreads();
 
 		if( is_in_body_component_grid() )
 		{
-			sys[0][c].pos() = CartCoord_A;
-			sys[1][c].pos() = CartCoord_B;
-			sys[b][c].pos() = CartCoord_planet;
-			
-			sys[0][c].vel() = StdMom_A / mA;
-			sys[1][c].vel() = StdMom_B / mB;
-			sys[b][c].vel() = StdMom_planet / sys[b].mass();
+			sys[b][c].pos() = CartCoord[b][c];
+			sys[b][c].vel() = StdMom[b][c] / sys[b].mass();
 		}
-
+		__syncthreads();
 	}
 
 	/// Standardized member name to call convert_jacobi_to_std_coord_without_shared() 
@@ -387,7 +383,7 @@ struct CloseBinaryPropagator {
         //Calculate semi-major axis of object using energy
           GPUAPI double calc_sma(int b)
 	  {
-	    double r, v2, sma;
+	    double r, v2;
 	    double x, y, z, vx, vy, vz;
 
 	    x = sys[b][0].pos();
@@ -405,7 +401,8 @@ struct CloseBinaryPropagator {
   	//Return minimum semi-major 
 	  GPUAPI double min_sma()
 	  {
-	    double temp, minsma = 1.0e30;
+	    double temp;
+	    double minsma = 1.0e30;
 	    
 	    //Calculate individual sma
             for (int b = 2; b < nbod; b++)
@@ -435,7 +432,6 @@ struct CloseBinaryPropagator {
 
 	    //Steps from John Chamber's Close Binary Propagator outlined in "N-Body Integrators for Planets in Binary Star Systems",
 	    //arXiv: 07053223v1
-
     
 	    ///Advance H, Planet Interaction by 0.5 * timestep
 	    if (is_in_body_component_grid_no_star())
@@ -444,6 +440,7 @@ struct CloseBinaryPropagator {
 	      }
 	    
 	    __syncthreads();
+	    
 	    ///Repeat NBin Times:
 	    for(int NStep = 0; NStep < NBin; NStep++)
 	      {
@@ -452,11 +449,11 @@ struct CloseBinaryPropagator {
 		    //Advance H, Star B Interaction by (0.5 * timestep) / NBin
 		    sys[b][c].vel() += h/2.0/NBin*calcForces.acc_binary_cb(ij,b,c);
 		  }
-		
+		__syncthreads();
+
 		    //Advance H, Star B Kep by (0.5 * timestep) / NBin
 		drift_kepler(sys[1][0].pos(), sys[1][1].pos(), sys[1][2].pos(), sys[1][0].vel(), sys[1][1].vel(), sys[1][2].vel(), sqrtGM, h/2.0/NBin*MBin/sys[0].mass());	  
 	      }
-	    __syncthreads();
 	    
 	    ///Advance H, Jump by 0.5 * timestep
 	    if (is_in_body_component_grid_no_star())
@@ -489,16 +486,15 @@ struct CloseBinaryPropagator {
 		  {
 		    //Advance H, Star B Interaction by (0.5 * timestep) / NBin
 		    sys[b][c].vel() += h/2.0/NBin*calcForces.acc_binary_cb(ij,b,c);
-		  }  
+		  }
+		__syncthreads();
 	      }
-	    __syncthreads();
 	    
 	    ///Advance H, Planet Interaction by 0.5 * timestep
 	    if (is_in_body_component_grid_no_star())
 	      {
 		sys[b][c].vel() += h/2.0 * calcForces.acc_planets_cb(ij,b,c);
 	      }
-
 	    __syncthreads();
 
 	    // Advance time for first thread
