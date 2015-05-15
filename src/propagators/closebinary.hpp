@@ -159,8 +159,8 @@ struct CloseBinaryPropagator {
 
 		if (is_in_body_component_grid())
 		  {
-		    sys[b][c].pos() = jacobipos[b]; //Finally switch to jacobi coordinates.
-		    sys[b][c].vel() = jacobimom[b] / sys[b].mass(); // Coord transforms are done in momentum space. Saving velocity
+		    sys[b][c].pos() = jacobipos[b][c]; //Finally switch to jacobi coordinates.
+		    sys[b][c].vel() = jacobimom[b][c] / sys[b].mass(); // Coord transforms are done in momentum space. Saving velocity
 		  }
 		
 		__syncthreads();
