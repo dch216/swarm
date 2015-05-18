@@ -50,8 +50,8 @@ struct CloseBinaryPropagator {
         //	for both star B and the planets. To initialize or compute new keplerian coordinates,
 	//	give member function .calc_coords() a single parameter - its body number (var 'b').
 	//	It has access to global sys class.
-        kepcoords kep_planet_b[nbod-2];
-	kepcoords kep_star_B;
+        //kepcoords kep_planet_b[nbod-2];
+	//kepcoords kep_star_B;
 
 	double sqrtGM;
         double MBin;
@@ -95,18 +95,18 @@ struct CloseBinaryPropagator {
 		sqrtGM = sqrt(sys[0].mass() * sys[1].mass() / MBin);
 		convert_std_to_jacobi_coord_without_shared();
 		__syncthreads();
-		if (is_in_body_component_grid_no_star())
-		  {
+      		//if (is_in_body_component_grid_no_star())
+		// {
 		    //initialize Keplarian coordinates for planet_b:
-		    kep_planet_b[b-2].init(b);
-		  }
-		__syncthreads();
+		//    kep_planet_b[b-2].init(b);
+		//  }
+		//__syncthreads();
 		
 		//initialize Keplarian coordinates for star_B:
-	       	kep_star_B.init(1);
+	       	//kep_star_B.init(1);
 
 		//Determine NBin using semi-major axes
-		NBin = int(0.5 + pow((min_sma() / calc_sma(1)), 1.5))
+		NBin = int(0.5 + pow((min_sma() / calc_sma(1)), 1.5));
 
 	}
 
@@ -120,14 +120,14 @@ struct CloseBinaryPropagator {
 	    double stdcoord_A,stdcoord_B;
 		double sum_masspos = 0., sum_mom = 0., mtot = 0.;
 		double mA = 0., mB = 0., nuA = 0., nuB = 0., momA = 0., momB = 0.;
-		double jacobipos[nbod][3] = 0., jacobimom[nbod][3] = 0.;
+		double jacobipos[nbod][3] = {0.}, jacobimom[nbod][3] = {0.};
 		if( is_in_body_component_grid() )
 		{
 			//convert Binary Element A's position over to Jacobi
 			stdcoord_A = sys[0][c].pos(); //Star A's cartesian coord
 			stdcoord_B = sys[1][c].pos(); //Star B's cartesian coord
 			mA = sys[0].mass(); //Star A's mass
-			mB = sys[1].mass() //Star B's mass
+			mB = sys[1].mass(); //Star B's mass
 			nuA = mA/(mA+mB); //mass fraction of A
 			nuB = mB/(mA+mB); //mass fraction of B
 			momA = mA * sys[0][c].vel(); //momentum of Star A
@@ -182,8 +182,8 @@ struct CloseBinaryPropagator {
 			   momA = 0.,
 			   momB =0.,
 			   sum_mom = 0.;
-		double CartCoord[nbod][3] = 0.,
-			   StdMom[nbod][3] = 0.,
+		double CartCoord[nbod][3] = {0.},
+		           StdMom[nbod][3] = {0.};
 			   
 		if( is_in_body_component_grid() )
 		{
@@ -207,7 +207,7 @@ struct CloseBinaryPropagator {
 			//calculate Momenta in Cartesian Coords
 			StdMom[0][c] = (1.0 - nuB) * ((1.0-mplan/mtot)*sys[0][c].vel()*mA - sum_mom - (sys[1][c].vel()*mB)/(1.0-nuB));
 			StdMom[1][c] = (sys[1][c].vel()*mB + nuB*StdMom[0][c])/(1.0-nuB);
-			StdMom[b][c] = sys[b][c].vel()*sys[b].mass() + (sys[b].mass/mtot)*sys[0][c].vel()*mA;
+			StdMom[b][c] = sys[b][c].vel()*sys[b].mass() + (sys[b].mass()/mtot)*sys[0][c].vel()*mA;
 			
 		}
 		__syncthreads();
@@ -228,6 +228,7 @@ struct CloseBinaryPropagator {
         GPUAPI void convert_std_to_internal_coord() 
 	{ convert_std_to_jacobi_coord_without_shared(); }
 
+  /*
 	//Keplerian Coordinates Class
 	class kepcoords
 	{
@@ -235,13 +236,15 @@ struct CloseBinaryPropagator {
 	  double eccentricity,semiMajorAxis, inclination,longitude,argumentP,meanMotion,MeanAnomaly;
 	  double rx,ry,rz,vx,vy,vz,lx,ly,lz;
 	  double GravC; // use sqrtGM!
-	  double GM = sqrtGM*sqrtGM;
+	  double GM;
 	  double ecc_x,ecc_y,ecc_z; // Eccentricity Vector
 	  
 	  public:
 	  //Calculate new (?) coordinates
 	  void init(double bodynum)
 	  {		
+            GM = sqrtGM*sqrtGM;
+
 	    //Intermediate Variables:
 	    double specE,rad_dist,L2,mu; //Specific Energy, radial distance, (ang momentum)^2, reduced mass
 	    double cen_mass[3]; // Center of Mass
@@ -365,20 +368,21 @@ struct CloseBinaryPropagator {
 	}
 
 	//Convert kepcoords BACK into Cartesian
-	  GPUAPI void convert_kep_to_cart(kepcoords kep_body)
-	  {
+	//  GPUAPI void convert_kep_to_cart(kepcoords kep_body)
+	//  {
 	    //Calculate position
 
 	    //Calculate velocity
 
 	    ///Write Values:
-	    sys[b][0].pos() = rx;
-	    sys[b][1].pos() = ry;
-	    sys[b][2].pos() = rz;
-	    sys[b][0].vel() = vx;
-	    sys[b][1].vel() = vy;
-	    sys[b][2].vel() = vz;
-	  }
+	//    sys[b][0].pos() = rx;
+	//    sys[b][1].pos() = ry;
+	//    sys[b][2].pos() = rz;
+	//    sys[b][0].vel() = vx;
+	//    sys[b][1].vel() = vy;
+	//    sys[b][2].vel() = vz;
+	//  }
+	*/	
 
         //Calculate semi-major axis of object using energy
           GPUAPI double calc_sma(int b)
