@@ -273,7 +273,7 @@ struct MVSPropagator {
 
 			// 3: Kepler Drift Step (Keplerian orbit about sun/central body)
 			if( (ij>0) && (ij<nbod)  ) 
-			    drift_kepler( sys[ij][0].pos(),sys[ij][1].pos(),sys[ij][2].pos(),sys[ij][0].vel(),sys[ij][1].vel(),sys[ij][2].vel(),sqrtGM, 2.0*hby2 );
+			  drift_kepler( sys[ij][0].pos(),sys[ij][1].pos(),sys[ij][2].pos(),sys[ij][0].vel(),sys[ij][1].vel(),sys[ij][2].vel(),sqrtGM, 2.0*hby2 );
 			__syncthreads();
 
 			// TODO: check for close encounters here
