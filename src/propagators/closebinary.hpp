@@ -3,6 +3,11 @@
  *          of John Chamber's Close Binary Propagator.
  *
  */
+/* Correct units for input parameters:
+ * Mass: Solar masses
+ * Positions: AU
+ * Velocities: AU/day
+ */
 
 #include "swarm/common.hpp"
 #include "swarm/swarmplugin.h"
@@ -96,141 +101,158 @@ struct CloseBinaryPropagator {
 	/// Initialization tasks executed before entering loop
         /// Cache sqrtGM, shift coord system, cache acceleration data for this thread's body and component
 	GPUAPI void init()  {
-	        MBin = sys[0].mass() + sys[1].mass();
-		sqrtGM = sqrt(sys[0].mass() * sys[1].mass() / MBin);
-		convert_std_to_jacobi_coord_without_shared();
-		__syncthreads();
-		acc_bc = calcForces.acc_planets_cb(ij,b,c);
+	  convert_mass_to_gauss();
+	  __syncthreads();
+	  MBin = sys[0].mass() + sys[1].mass();
+	  sqrtGM = sqrt(sys[0].mass() * sys[1].mass() / MBin);
+	  convert_std_to_jacobi_coord_without_shared();
+	  __syncthreads();
+	  acc_bc = calcForces.acc_planets_cb(ij,b,c);
       	        
-		/*
-		if (is_in_body_component_grid_no_star())
-		 {
-		    //initialize Keplarian coordinates for planet_b:
-		    kep_planet_b[b-2].init(b);
-		  }
-		__syncthreads();
-		
-		
-		//initialize Keplarian coordinates for star_B:
-	       	kep_star_B.init(1);
-		*/
-
-		//Determine NBin using semi-major axes
-		NBin = int(0.5 + pow((min_sma() / calc_sma(1)), 1.5));
+	  /*
+	    if (is_in_body_component_grid_no_star())
+	    {
+	    //initialize Keplarian coordinates for planet_b:
+	    kep_planet_b[b-2].init(b);
+	    }
+	    __syncthreads();
+	    
+	    
+	    //initialize Keplarian coordinates for star_B:
+	    kep_star_B.init(1);
+	  */
+	  
+	  //Determine NBin using semi-major axes
+	  NBin = int(0.5 + pow((min_sma() / calc_sma(1)), 1.5));
 	}
 
 	/// Before exiting, convert back to standard cartesian coordinate system
 	GPUAPI void shutdown() { 
 	convert_jacobi_to_std_coord_without_shared();
+	__syncthreads();
+	convert_mass_to_solar();
+	__syncthreads();
 	}
+
+        ///Convert mass to Gaussian units
+        GPUAPI void convert_mass_to_gauss()   {
+	  if ( is_in_body_component_grid() )
+	    sys[b].mass() *= 2.959122082855911e-04
+        }
+
+        ///Convert Gaussian mass back to solar units
+        GPUAPI void convert_mass_to_solar()   {
+	  if ( is_in_body_component_grid() )
+	    sys[b].mass() /= 2.959122082855911e-04
+        }
 
 	///Convert to Jacobi Coordinates from Cartesian
 	GPUAPI void convert_std_to_jacobi_coord_without_shared()  { 
-	    double stdcoord_A,stdcoord_B;
-		double sum_masspos = 0., sum_mom = 0., mtot = 0.;
-		double mA = 0., mB = 0., nuA = 0., nuB = 0., momA = 0., momB = 0.;
-		double jacobipos[nbod][3] = {0.}, jacobimom[nbod][3] = {0.};
-		if( is_in_body_component_grid() )
+	  double stdcoord_A,stdcoord_B;
+	  double sum_masspos = 0., sum_mom = 0., mtot = 0.;
+	  double mA = 0., mB = 0., nuA = 0., nuB = 0., momA = 0., momB = 0.;
+	  double jacobipos[nbod][3] = {0.}, jacobimom[nbod][3] = {0.};
+	  if( is_in_body_component_grid() )
+	    {
+	      //convert Binary Element A's position over to Jacobi
+	      stdcoord_A = sys[0][c].pos(); //Star A's cartesian coord
+	      stdcoord_B = sys[1][c].pos(); //Star B's cartesian coord
+	      mA = sys[0].mass(); //Star A's mass
+	      mB = sys[1].mass(); //Star B's mass
+	      nuA = mA/(mA+mB); //mass fraction of A
+	      nuB = mB/(mA+mB); //mass fraction of B
+	      momA = mA * sys[0][c].vel(); //momentum of Star A
+	      momB = mB * sys[1][c].vel(); //momentum of Star B
+	      
+	      //Sum both the mass*pos, mass*vel (momentum) of each planet, total mass of planets, 
+	      for(int j=2;j<nbod;j++)
 		{
-			//convert Binary Element A's position over to Jacobi
-			stdcoord_A = sys[0][c].pos(); //Star A's cartesian coord
-			stdcoord_B = sys[1][c].pos(); //Star B's cartesian coord
-			mA = sys[0].mass(); //Star A's mass
-			mB = sys[1].mass(); //Star B's mass
-			nuA = mA/(mA+mB); //mass fraction of A
-			nuB = mB/(mA+mB); //mass fraction of B
-			momA = mA * sys[0][c].vel(); //momentum of Star A
-			momB = mB * sys[1][c].vel(); //momentum of Star B
-			
-			//Sum both the mass*pos, mass*vel (momentum) of each planet, total mass of planets, 
-			for(int j=2;j<nbod;j++)
-			{
-				const double mj = sys[j].mass();
-				mtot += mj;
-				
-				sum_masspos += mj*sys[j][c].pos();
-				sum_mom += mj*sys[j][c].vel();
-			}
-			mtot += mA + mB; //add in star mass to total mass
-			
-			//calculate jacobi position of star A, B and the planet:
-			jacobipos[0][c] = (sum_masspos + stdcoord_A*mA + stdcoord_B*mB)/mtot;
-			jacobipos[1][c] = stdcoord_B - stdcoord_A;
-			jacobipos[b][c] = sys[b][c].pos() - (nuA*stdcoord_A + nuB*stdcoord_B);
-			
-			//calculate jacobi/conjugate momenta of the stars A and B, and the planet's:
-			jacobimom[0][c] = momA + momB + sum_mom;
-			jacobimom[1][c] = momB - nuB * (momA - momB);
-			jacobimom[b][c] = sys[b].mass() * sys[b][c].vel() - sys[b].mass()*(momA + momB + sum_mom)/mtot;
+		  const double mj = sys[j].mass();
+		  mtot += mj;
+		  
+		  sum_masspos += mj*sys[j][c].pos();
+		  sum_mom += mj*sys[j][c].vel();
 		}
+	      mtot += mA + mB; //add in star mass to total mass
+	      
+	      //calculate jacobi position of star A, B and the planet:
+	      jacobipos[0][c] = (sum_masspos + stdcoord_A*mA + stdcoord_B*mB)/mtot;
+	      jacobipos[1][c] = stdcoord_B - stdcoord_A;
+	      jacobipos[b][c] = sys[b][c].pos() - (nuA*stdcoord_A + nuB*stdcoord_B);
+	      
+	      //calculate jacobi/conjugate momenta of the stars A and B, and the planet's:
+	      jacobimom[0][c] = momA + momB + sum_mom;
+	      jacobimom[1][c] = momB - nuB * (momA - momB);
+	      jacobimom[b][c] = sys[b].mass() * sys[b][c].vel() - sys[b].mass()*(momA + momB + sum_mom)/mtot;
+	    }
 		
-		__syncthreads();
+	  __syncthreads();
 
-		if (is_in_body_component_grid())
-		  {
-		    sys[b][c].pos() = jacobipos[b][c]; //Finally switch to jacobi coordinates.
-		    sys[b][c].vel() = jacobimom[b][c] / sys[b].mass(); // Coord transforms are done in momentum space. Saving velocity
-		  }
+	  if (is_in_body_component_grid())
+	    {
+	      sys[b][c].pos() = jacobipos[b][c]; //Finally switch to jacobi coordinates.
+	      sys[b][c].vel() = jacobimom[b][c] / sys[b].mass(); // Coord transforms are done in momentum space. Saving velocity
+	    }
 		
-		__syncthreads();
+	  __syncthreads();
 		
 	}
 
 	///Convert back to Cartesian, from Jacobi
-	GPUAPI void convert_jacobi_to_std_coord_without_shared()  { 
+        GPUAPI void convert_jacobi_to_std_coord_without_shared()  { 
+	  
+	  double JPos_A = 0.,
+	    JPos_B = 0.,
+	    mA = sys[0].mass(),
+	    mB = sys[1].mass(),
+	    mplan = 0.,
+	    mtot = 0.,
+	    nuA = mA / (mA + mB),
+	    nuB = mB / (mA + mB),
+	    sum_masspos = 0.,
+	    momA = 0.,
+	    momB =0.,
+	    sum_mom = 0.;
+	  double CartCoord[nbod][3] = {0.},
+	    StdMom[nbod][3] = {0.};
+	    
+	    if( is_in_body_component_grid() )
+	      {
+		JPos_A = sys[0][c].pos();
+		JPos_B = sys[1][c].pos();
 		
-		double JPos_A = 0.,
-			   JPos_B = 0.,
-			   mA = sys[0].mass(),
-			   mB = sys[1].mass(),
-			   mplan = 0.,
-			   mtot = 0.,
-			   nuA = mA / (mA + mB),
-			   nuB = mB / (mA + mB),
-			   sum_masspos = 0.,
-			   momA = 0.,
-			   momB =0.,
-			   sum_mom = 0.;
-		double CartCoord[nbod][3] = {0.},
-		           StdMom[nbod][3] = {0.};
-			   
-		if( is_in_body_component_grid() )
-		{
-		  JPos_A = sys[0][c].pos();
-		  JPos_B = sys[1][c].pos();
-		  
-			//Calculate SUM(mj*Jj)
-			for(int j = 2;j<nbod;j++)
-			{
-				sum_masspos += sys[j].mass()*sys[j][c].pos();
-				mplan += sys[j].mass();
-				sum_mom += sys[j].mass()*sys[j][c].vel();
-			}
-			mtot = mA + mB + mplan;
+		//Calculate SUM(mj*Jj)
+		for(int j = 2;j<nbod;j++)
+		  {
+		    sum_masspos += sys[j].mass()*sys[j][c].pos();
+		    mplan += sys[j].mass();
+		    sum_mom += sys[j].mass()*sys[j][c].vel();
+		  }
+		mtot = mA + mB + mplan;
+		
+		//Calculate Cartesian Coordinates:
+		CartCoord[0][c] = (JPos_A*mtot - (mB +mplan*nuB)*JPos_B - sum_masspos) / (mA + mB + mplan*(nuA + nuB));
+		CartCoord[1][c] = JPos_B + CartCoord[0][c];
+		CartCoord[b][c] = sys[b][c].pos() + nuA*CartCoord[0][c] + nuB*CartCoord[1][c];
 			
-			//Calculate Cartesian Coordinates:
-			CartCoord[0][c] = (JPos_A*mtot - (mB +mplan*nuB)*JPos_B - sum_masspos) / (mA + mB + mplan*(nuA + nuB));
-			CartCoord[1][c] = JPos_B + CartCoord[0][c];
-			CartCoord[b][c] = sys[b][c].pos() + nuA*CartCoord[0][c] + nuB*CartCoord[1][c];
+		//calculate Momenta in Cartesian Coords
+		StdMom[0][c] = (1.0 - nuB) * ((1.0-mplan/mtot)*sys[0][c].vel()*mA - sum_mom - (sys[1][c].vel()*mB)/(1.0-nuB));
+		StdMom[1][c] = (sys[1][c].vel()*mB + nuB*StdMom[0][c])/(1.0-nuB);
+		StdMom[b][c] = sys[b][c].vel()*sys[b].mass() + (sys[b].mass()/mtot)*sys[0][c].vel()*mA;
 			
-			//calculate Momenta in Cartesian Coords
-			StdMom[0][c] = (1.0 - nuB) * ((1.0-mplan/mtot)*sys[0][c].vel()*mA - sum_mom - (sys[1][c].vel()*mB)/(1.0-nuB));
-			StdMom[1][c] = (sys[1][c].vel()*mB + nuB*StdMom[0][c])/(1.0-nuB);
-			StdMom[b][c] = sys[b][c].vel()*sys[b].mass() + (sys[b].mass()/mtot)*sys[0][c].vel()*mA;
-			
-		}
-		__syncthreads();
+	      }
+	    __syncthreads();
 
-		if( is_in_body_component_grid() )
-		{
-			sys[b][c].pos() = CartCoord[b][c];
-			sys[b][c].vel() = StdMom[b][c] / sys[b].mass();
-		}
-		__syncthreads();
+	    if( is_in_body_component_grid() )
+	      {
+		sys[b][c].pos() = CartCoord[b][c];
+		sys[b][c].vel() = StdMom[b][c] / sys[b].mass();
+	      }
+	    __syncthreads();
 	}
 
 	/// Standardized member name to call convert_jacobi_to_std_coord_without_shared() 
-	GPUAPI void convert_internal_to_std_coord() 
+        GPUAPI void convert_internal_to_std_coord() 
 	{ convert_jacobi_to_std_coord_without_shared();	} 
 
 	/// Standardized member name to call convert_std_to_jacobi_coord_without_shared()
