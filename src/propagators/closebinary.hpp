@@ -102,11 +102,9 @@ struct CloseBinaryPropagator {
         /// Cache sqrtGM, shift coord system, cache acceleration data for this thread's body and component
 	GPUAPI void init()  {
 	  convert_mass_to_gauss();
-	  __syncthreads();
 	  MBin = sys[0].mass() + sys[1].mass();
 	  sqrtGM = sqrt(sys[0].mass() * sys[1].mass() / MBin);
 	  convert_std_to_jacobi_coord_without_shared();
-	  __syncthreads();
 	  acc_bc = calcForces.acc_planets_cb(ij,b,c);
       	        
 	  /*
@@ -129,21 +127,25 @@ struct CloseBinaryPropagator {
 	/// Before exiting, convert back to standard cartesian coordinate system
 	GPUAPI void shutdown() { 
 	convert_jacobi_to_std_coord_without_shared();
-	__syncthreads();
 	convert_mass_to_solar();
-	__syncthreads();
 	}
 
         ///Convert mass to Gaussian units
         GPUAPI void convert_mass_to_gauss()   {
 	  if ( is_in_body_component_grid() )
 	    sys[b].mass() *= 2.959122082855911e-04;
+	  
+	  __syncthreads();
+
         }
 
         ///Convert Gaussian mass back to solar units
         GPUAPI void convert_mass_to_solar()   {
 	  if ( is_in_body_component_grid() )
 	    sys[b].mass() /= 2.959122082855911e-04;
+
+	  __syncthreads();
+
         }
 
 	///Convert to Jacobi Coordinates from Cartesian
