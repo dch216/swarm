@@ -137,13 +137,13 @@ struct CloseBinaryPropagator {
         ///Convert mass to Gaussian units
         GPUAPI void convert_mass_to_gauss()   {
 	  if ( is_in_body_component_grid() )
-	    sys[b].mass() *= 2.959122082855911e-04
+	    sys[b].mass() *= 2.959122082855911e-04;
         }
 
         ///Convert Gaussian mass back to solar units
         GPUAPI void convert_mass_to_solar()   {
 	  if ( is_in_body_component_grid() )
-	    sys[b].mass() /= 2.959122082855911e-04
+	    sys[b].mass() /= 2.959122082855911e-04;
         }
 
 	///Convert to Jacobi Coordinates from Cartesian
