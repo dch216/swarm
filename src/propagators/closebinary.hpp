@@ -103,7 +103,7 @@ struct CloseBinaryPropagator {
 	GPUAPI void init()  {
 	  convert_mass_to_gauss();
 	  MBin = sys[0].mass() + sys[1].mass();
-	  sqrtGM = sqrt(sys[0].mass() * sys[1].mass() / MBin);
+	  sqrtGM = sqrt(sys[0].mass() * sys[0].mass() / MBin);
 	  convert_std_to_jacobi_coord_without_shared();
 	  acc_bc = calcForces.acc_planets_cb(ij,b,c);
       	        
