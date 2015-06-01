@@ -422,7 +422,7 @@ struct CloseBinaryPropagator {
           GPUAPI double calc_sma(int b)
 	  {
 	    double r, v2;
-	    double x, y, z, vx, vy, vz;
+	    double gm, x, y, z, vx, vy, vz;
 
 	    x = sys[b][0].pos();
 	    y = sys[b][1].pos();
@@ -430,7 +430,7 @@ struct CloseBinaryPropagator {
 	    vx = sys[b][0].vel();
 	    vy = sys[b][1].vel();
 	    vz = sys[b][2].vel();
-	    gm = 0.0
+	    gm = 0.0;
 	    
 	    if (b == 1)
 	      gm = sqrtGM * sqrtGM;
