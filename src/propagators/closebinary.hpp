@@ -62,6 +62,9 @@ struct CloseBinaryPropagator {
         //kepcoords kep_planet_b[nbod-2];
 	//kepcoords kep_star_B;
 
+        double coord_shift[3];
+        double vel_shift[3];
+
 	double sqrtGM;
         double MBin;
 	double max_timestep;
@@ -105,6 +108,16 @@ struct CloseBinaryPropagator {
 	  convert_mass_to_gauss();
 	  MBin = sys[0].mass() + sys[1].mass();
 	  sqrtGM = sqrt(sys[0].mass() * sys[0].mass() / MBin);
+	  /*
+	  coord_shift[0] = sys[0][0].pos();
+	  coord_shift[1] = sys[0][1].pos();
+	  coord_shift[2] = sys[0][2].pos();
+	  vel_shift[0] = sys[0][0].vel();
+	  vel_shift[1] = sys[0][1].vel();
+	  vel_shift[2] = sys[0][2].vel();
+	  
+	  bary_to_prim();
+	  */
 	  convert_std_to_jacobi_coord_without_shared();
 	  acc_bc = calcForces.acc_planets_cb(ij,b,c);
       	        
@@ -128,6 +141,7 @@ struct CloseBinaryPropagator {
 	/// Before exiting, convert back to standard cartesian coordinate system
 	GPUAPI void shutdown() { 
 	convert_jacobi_to_std_coord_without_shared();
+	//prim_to_bary();
 	convert_mass_to_solar();
 	}
 
@@ -149,12 +163,32 @@ struct CloseBinaryPropagator {
 
         }
 
+        ///Move origin from barycenter to primary
+        GPUAPI void bary_to_prim() {
+	  if( is_in_body_component_grid() )
+	    {
+	      sys[b][c].pos() -= coord_shift[c];
+	      sys[b][c].vel() -= vel_shift[c];
+	    }
+	  __syncthreads();
+	}
+
+      ///Move origin from primary to barycenter
+        GPUAPI void prim_to_bary() {
+	  if( is_in_body_component_grid() )
+	    {
+	      sys[b][c].pos() += coord_shift[c];
+	      sys[b][c].vel() += vel_shift[c];
+	    }
+	  __syncthreads();
+	}
+
 	///Convert to Jacobi Coordinates from Cartesian
 	GPUAPI void convert_std_to_jacobi_coord_without_shared()  { 
 	  double stdcoord_A,stdcoord_B;
 	  double sum_masspos = 0., sum_mom = 0., mtot = 0.;
 	  double mA = 0., mB = 0., nuA = 0., nuB = 0., momA = 0., momB = 0.;
-	  double jacobipos[nbod][3] = {0.}, jacobimom[nbod][3] = {0.};
+	  double jacobipos = 0., jacobimom = 0.;
 	  if( is_in_body_component_grid() )
 	    {
 	      //convert Binary Element A's position over to Jacobi
@@ -177,24 +211,32 @@ struct CloseBinaryPropagator {
 		  sum_mom += mj*sys[j][c].vel();
 		}
 	      mtot += mA + mB; //add in star mass to total mass
+	      __syncthreads();
 	      
 	      //calculate jacobi position of star A, B and the planet:
-	      jacobipos[0][c] = (sum_masspos + stdcoord_A*mA + stdcoord_B*mB)/mtot;
-	      jacobipos[1][c] = stdcoord_B - stdcoord_A;
-	      jacobipos[b][c] = sys[b][c].pos() - (nuA*stdcoord_A + nuB*stdcoord_B);
+	      if (b == 0)
+		jacobipos = (sum_masspos + stdcoord_A*mA + stdcoord_B*mB)/mtot;
+	      else if (b == 1)
+		jacobipos = stdcoord_B - stdcoord_A;
+	      else
+		jacobipos = sys[b][c].pos() - (nuA*stdcoord_A + nuB*stdcoord_B);
+	      __syncthreads();
 	      
 	      //calculate jacobi/conjugate momenta of the stars A and B, and the planet's:
-	      jacobimom[0][c] = momA + momB + sum_mom;
-	      jacobimom[1][c] = momB - nuB * (momA - momB);
-	      jacobimom[b][c] = sys[b].mass() * sys[b][c].vel() - sys[b].mass()*(momA + momB + sum_mom)/mtot;
+	      if (b == 0)
+		jacobimom = momA + momB + sum_mom;
+	      else if (b == 1)
+		jacobimom = momB - nuB * (momA + momB);
+	      else
+		jacobimom = sys[b].mass() * sys[b][c].vel() - sys[b].mass()*(momA + momB + sum_mom)/mtot;
 	    }
 		
 	  __syncthreads();
 
 	  if (is_in_body_component_grid())
 	    {
-	      sys[b][c].pos() = jacobipos[b][c]; //Finally switch to jacobi coordinates.
-	      sys[b][c].vel() = jacobimom[b][c] / sys[b].mass(); // Coord transforms are done in momentum space. Saving velocity
+	      sys[b][c].pos() = jacobipos; //Finally switch to jacobi coordinates.
+	      sys[b][c].vel() = jacobimom / sys[b].mass(); // Coord transforms are done in momentum space. Saving velocity
 	    }
 		
 	  __syncthreads();
@@ -204,20 +246,12 @@ struct CloseBinaryPropagator {
 	///Convert back to Cartesian, from Jacobi
         GPUAPI void convert_jacobi_to_std_coord_without_shared()  { 
 	  
-	  double JPos_A = 0.,
-	    JPos_B = 0.,
-	    mA = sys[0].mass(),
-	    mB = sys[1].mass(),
-	    mplan = 0.,
-	    mtot = 0.,
-	    nuA = mA / (mA + mB),
-	    nuB = mB / (mA + mB),
-	    sum_masspos = 0.,
-	    momA = 0.,
-	    momB =0.,
-	    sum_mom = 0.;
-	  double CartCoord[nbod][3] = {0.},
-	    StdMom[nbod][3] = {0.};
+	  double JPos_A = 0., JPos_B = 0.,
+	    mA = sys[0].mass(), mB = sys[1].mass(), mplan = 0., mtot = 0.,
+	    nuA = mA / (mA + mB), nuB = mB / (mA + mB), sum_masspos = 0.,
+	    momA = 0., momB =0., sum_mom = 0.,
+	    tmp1 = 0., tmp2 = 0., tmp3 = 0., tmp4 = 0.;
+	  double CartCoord = 0., StdMom = 0.;
 	    
 	    if( is_in_body_component_grid() )
 	      {
@@ -232,24 +266,37 @@ struct CloseBinaryPropagator {
 		    sum_mom += sys[j].mass()*sys[j][c].vel();
 		  }
 		mtot = mA + mB + mplan;
+		__syncthreads();
+
+		tmp1 = (JPos_A*mtot - (mB +mplan*nuB)*JPos_B - sum_masspos) / (mA + mB + mplan*(nuA + nuB));
+		tmp2 = ((1.0 - nuB) * ((1.0-(mplan/mtot))*sys[0][c].vel()*mA - sum_mom) - (sys[1][c].vel()*mB));
+		tmp3 = ((sys[1][c].vel()*mB)+(nuB*tmp2))/(1.0-nuB);
+		tmp4 = (sum_mom + (mplan/mtot)*(tmp2+tmp3))/(1.0-(mplan/mtot));
+		__syncthreads;
 		
 		//Calculate Cartesian Coordinates:
-		CartCoord[0][c] = (JPos_A*mtot - (mB +mplan*nuB)*JPos_B - sum_masspos) / (mA + mB + mplan*(nuA + nuB));
-		CartCoord[1][c] = JPos_B + CartCoord[0][c];
-		CartCoord[b][c] = sys[b][c].pos() + nuA*CartCoord[0][c] + nuB*CartCoord[1][c];
+		if (b == 0)
+		  CartCoord = tmp1;
+		else if (b == 1)
+		  CartCoord = JPos_B + tmp1;
+		else
+		  CartCoord = sys[b][c].pos() + nuA*tmp1 + nuB*tmp2;
 			
 		//calculate Momenta in Cartesian Coords
-		StdMom[0][c] = (1.0 - nuB) * ((1.0-mplan/mtot)*sys[0][c].vel()*mA - sum_mom - (sys[1][c].vel()*mB)/(1.0-nuB));
-		StdMom[1][c] = (sys[1][c].vel()*mB + nuB*StdMom[0][c])/(1.0-nuB);
-		StdMom[b][c] = sys[b][c].vel()*sys[b].mass() + (sys[b].mass()/mtot)*sys[0][c].vel()*mA;
+		if (b == 0)
+		  StdMom = tmp2;
+		else if (b == 1)
+		  StdMom = tmp3;
+		else
+		  StdMom = sys[b][c].vel()*sys[b].mass() + (sys[b].mass()/mtot)*(tmp2+tmp3+tmp4);
 			
 	      }
 	    __syncthreads();
 
 	    if( is_in_body_component_grid() )
 	      {
-		sys[b][c].pos() = CartCoord[b][c];
-		sys[b][c].vel() = StdMom[b][c] / sys[b].mass();
+		sys[b][c].pos() = CartCoord;
+		sys[b][c].vel() = StdMom / sys[b].mass();
 	      }
 	    __syncthreads();
 	}
@@ -432,7 +479,9 @@ struct CloseBinaryPropagator {
 	    vz = sys[b][2].vel();
 	    gm = 0.0;
 	    
-	    if (b == 1)
+	    if (b == 0)
+	      return 0.0;
+	    else if (b == 1)
 	      gm = sqrtGM * sqrtGM;
 	    else
 	      gm = MBin + sys[b].mass();
@@ -458,7 +507,7 @@ struct CloseBinaryPropagator {
 	    return minsma;
 	  }
 
-        //Return component sum of momentum
+        // Return component sum of momentum
           GPUAPI double mvsum(int c)
 	  {
 	    double mv = 0.0;
@@ -468,6 +517,76 @@ struct CloseBinaryPropagator {
 	      }
 	    return mv;
 	  }
+
+        // Return binary terms of acceleration
+          GPUAPI double bin_acc(int b, int c)
+          {
+	    double dx, dy, dz, s_3;
+	    double tmp;
+	    double x_i, y_i, z_i, x_2, y_2, z_2;
+	    double acc = 0.0;
+
+	    x_i = sys[b][0].pos();
+	    y_i = sys[b][1].pos();
+	    z_i = sys[b][2].pos();
+	    x_2 = sys[1][0].pos();
+	    y_2 = sys[1][1].pos();
+	    z_2 = sys[1][2].pos();
+
+	    s_3 = pow(x_i*x_i + y_i*y_i + z_i*z_i, -1.5);
+	    tmp = MBin * s_3;
+	    acc += tmp * sys[b][c].pos();
+
+	    dx = MBin*x_i + sys[1].mass() * x_2;
+	    dy = MBin*y_i + sys[1].mass() * y_2;
+	    dz = MBin*z_i + sys[1].mass() * z_2;
+	    s_3 = pow(dx*dx + dy*dy + dz*dz, -1.5);
+	    tmp = MBin * MBin * sys[0].mass() * s_3;
+	    acc -= tmp*(MBin*sys[b][c].pos() + sys[1].mass() * sys[1][c].pos());
+
+	    dx = MBin*x_i - sys[0].mass() * x_2;
+	    dy = MBin*y_i - sys[0].mass() * y_2;
+	    dz = MBin*z_i - sys[0].mass() * z_2;
+	    s_3 = pow(dx*dx + dy*dy + dz*dz, -1.5);
+	    tmp = MBin * MBin * sys[1].mass() * s_3;
+	    acc -= tmp*(MBin*sys[b][c].pos() - sys[0].mass() * sys[1][c].pos());
+
+	    return acc;
+          }
+
+	// Return secondary acceleration components
+          GPUAPI double sec_acc(int c)
+          {
+	    double dx, dy, dz, s_3;
+	    double tmp;
+	    double x_i, y_i, z_i, x_2, y_2, z_2;
+	    double acc = 0.0;
+
+	    for (int ntmp = 2; ntmp < nbod; ntmp++)
+	      {
+		x_i = sys[ntmp][0].pos();
+		y_i = sys[ntmp][1].pos();
+		z_i = sys[ntmp][2].pos();
+		x_2 = sys[1][0].pos();
+		y_2 = sys[1][1].pos();
+		z_2 = sys[1][2].pos();
+		
+		dx = MBin*x_i + sys[1].mass() * x_2;
+		dy = MBin*y_i + sys[1].mass() * y_2;
+		dz = MBin*z_i + sys[1].mass() * z_2;
+		s_3 = pow(dx*dx + dy*dy + dz*dz, -1.5);
+		tmp = MBin * sys[0].mass() * sys[ntmp].mass() * s_3;
+		acc -= tmp*(MBin*sys[ntmp][c].pos() + sys[1].mass() * sys[1][c].pos());
+
+		dx = MBin*x_i - sys[0].mass() * x_2;
+		dy = MBin*y_i - sys[0].mass() * y_2;
+		dz = MBin*z_i - sys[0].mass() * z_2;
+		s_3 = pow(dx*dx + dy*dy + dz*dz, -1.5);
+		tmp = MBin * sys[0].mass() * sys[ntmp].mass() * s_3;
+		acc += tmp*(MBin*sys[ntmp][c].pos() - sys[0].mass() * sys[1][c].pos());
+	      }
+	    return acc;
+          }
 
 	// Advance system by one time unit
 	  GPUAPI void advance()
@@ -486,19 +605,28 @@ struct CloseBinaryPropagator {
 	    for(int NStep = 0; NStep < NBin; NStep++)
 	      {
 		//Advance H, Star B Interaction by (0.5 * timestep) / NBin
+		/*
 		if (b == 1)
 		  {
 		    acc_bc = calcForces.acc_planets_cb(ij,b,c);
 		    sys[b][c].vel() += h/2.0/NBin * acc_bc;
 		  }
 		__syncthreads();
-		acc_bc = calcForces.acc_binary_cb(ij,b,c);
+		*/
+		
+		if (b == 1)
+		  acc_bc = sec_acc(c);
+		else if (is_in_body_component_grid_no_star())
+		  acc_bc = bin_acc(b,c);
+		//acc_bc = calcForces.acc_binary_cb(ij,b,c);
 		if (is_in_body_component_grid_no_prim())
 		  sys[b][c].vel() += h/2.0/NBin * acc_bc;
 		__syncthreads();
 
 		//Advance H, Star B Kep by (0.5 * timestep) / NBin
-		kep_cb::drift_kepler(sys[1][0].pos(), sys[1][1].pos(), sys[1][2].pos(), sys[1][0].vel(), sys[1][1].vel(), sys[1][2].vel(), sqrtGM, h/2.0/NBin*MBin/sys[0].mass());	  
+		if( is_first_thread_in_system() ) 
+		  kep_cb::drift_kepler(sys[1][0].pos(), sys[1][1].pos(), sys[1][2].pos(), sys[1][0].vel(), sys[1][1].vel(), sys[1][2].vel(), sqrtGM, h/2.0/NBin*MBin/sys[0].mass());	
+		__syncthreads();
 	      }
 
 	    ///Advance H, Jump by 0.5 * timestep
@@ -509,12 +637,12 @@ struct CloseBinaryPropagator {
 	    __syncthreads();
 	    
 	    ///Advance H, Planet Kep by timestep
-	    if (is_in_body_component_grid_no_star())
-	      kep_cb::drift_kepler(sys[b][0].pos(), sys[b][1].pos(), sys[b][2].pos(), sys[b][0].vel(), sys[b][1].vel(), sys[b][2].vel(), sqrt(MBin), h);
+	    if ((ij > 1) && (ij < nbod))
+		kep_cb::drift_kepler(sys[ij][0].pos(), sys[ij][1].pos(), sys[ij][2].pos(), sys[ij][0].vel(), sys[ij][1].vel(), sys[ij][2].vel(), sqrt(MBin), h);
 	    __syncthreads();
 	    
 	    ///Advance H, Jump by 0.5 * timestep
-	      mvsum_c = mvsum(c);
+	    mvsum_c = mvsum(c);
 	    __syncthreads();
 	    if (is_in_body_component_grid_no_star())
 	      sys[b][c].pos() += h/2.0/MBin * mvsum_c;
@@ -524,16 +652,24 @@ struct CloseBinaryPropagator {
 	    for(int NStep = 0; NStep < NBin; NStep++)
 	      {
 		//Advance H, Star B Kep by (0.5 * timestep) / NBin
-		kep_cb::drift_kepler(sys[1][0].pos(), sys[1][1].pos(), sys[1][2].pos(), sys[1][0].vel(), sys[1][1].vel(), sys[1][2].vel(), sqrtGM, h/2.0/NBin*MBin/sys[0].mass());
+		if( is_first_thread_in_system() ) 
+		  kep_cb::drift_kepler(sys[1][0].pos(), sys[1][1].pos(), sys[1][2].pos(), sys[1][0].vel(), sys[1][1].vel(), sys[1][2].vel(), sqrtGM, h/2.0/NBin*MBin/sys[0].mass());
+		__syncthreads();
 
 		//Advance H, Star B Interaction by (0.5 * timestep) / NBin
+		/*
 		if (b == 1)
 		  {
 		    acc_bc = calcForces.acc_planets_cb(ij,b,c);
 		    sys[b][c].vel() += h/2.0/NBin * acc_bc;
 		  }
 		__syncthreads();
-		acc_bc = calcForces.acc_binary_cb(ij,b,c);
+		*/
+		if (b == 1)
+		  acc_bc = sec_acc(c);
+		else if (is_in_body_component_grid_no_star())
+		  acc_bc = bin_acc(b,c);
+		//acc_bc = calcForces.acc_binary_cb(ij,b,c);
 		if (is_in_body_component_grid_no_prim())
 		    sys[b][c].vel() += h/2.0/NBin * acc_bc;
 		__syncthreads();
