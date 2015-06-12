@@ -216,12 +216,16 @@ GPUAPI void drift_kepler(double& x_old, double& y_old, double& z_old, double& vx
 //! dfdt,dgdt function equation 2.38b PC
    double dfdt;
    double dgdt = 1.0 - (x2/r)*Cp;
+   /* //Commented out due to disagreement with Mercury 
+   // and worse energy conservation
    if (fabs(g_p) > MINDENOM) 
       //! conservation of angular momentum means that f dfdt - g dfdt =1
-      dfdt = (f_p*dgdt - 1.0)/g_p;
+       dfdt = (f_p*dgdt - 1.0)/g_p;
    else
+   */
       //! dfdt,dgdt function equation 2.38b PC
-      dfdt = x_p*smu/(r*r0)*(alx2*Sp - 1.0);
+   dfdt = x_p*smu/(r*r0)*(alx2*Sp - 1.0);
+
   
    x = f_p*x_old + g_p*vx_old;     //! eqn 2.65 M+D
    y = f_p*y_old + g_p*vy_old;

@@ -4,6 +4,7 @@ SWARM_ADD_EXECUTABLE(montecarlo montecarlo.cpp kepler.cpp)
 SWARM_ADD_EXECUTABLE(montecarlo_ecclimit montecarlo_ecclimit.cpp kepler.cpp)
 SWARM_ADD_EXECUTABLE(montecarlo_mcmc_outputs montecarlo_mcmc_outputs.cpp kepler.cpp)
 SWARM_ADD_EXECUTABLE(tutorial_ensemble tutorial_ensemble.cpp)
+SWARM_ADD_EXECUTABLE(convert_kep2cart convert_kep2cart.cpp kepler.cpp)
 
 
 
