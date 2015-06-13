@@ -108,7 +108,7 @@ namespace swarm {
 	  if ((fabs(sys[0][0].pos()) > 1.0e-13) || (fabs(sys[0][1].pos()) > 1.0e-13) || (fabs(sys[0][2].pos()) > 1.0e-13) || (fabs(sys[0][0].vel()) > 1.0e-13) || (fabs(sys[0][1].vel()) > 1.0e-13) || (fabs(sys[0][2].vel()) > 1.0e-13))
 	    {
 	      if (is_first_thread_in_system())
-		printf("Warning: Input coordinates not centered on primary. CB propagator will produce output centered on primary!\n");
+		printf("Warning: Input coordinates of System %d not centered on primary. CB propagator will produce output centered on primary!\n", sys.id());
 	      orig_to_helio();
 	    }
 
