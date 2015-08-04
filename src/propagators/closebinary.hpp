@@ -109,9 +109,10 @@ namespace swarm {
 	    {
 	      if (is_first_thread_in_system())
 		printf("Warning: Input coordinates of System %d not centered on primary. CB propagator will produce output centered on primary!\n", sys.id());
+
 	      orig_to_helio();
 	    }
-
+	    
 	  convert_hel_to_jacobi_coord_without_shared();
 	  acc_bc = calcForces.acc_planets_cb(ij,b,c);
 
@@ -128,7 +129,7 @@ namespace swarm {
 
         ///Convert mass to Gaussian units
         GPUAPI void convert_mass_to_gauss()   {
-	  if ( is_in_body_component_grid() )
+	  if ( c == 0 )
 	    sys[b].mass() *= 2.959122082855911e-04;
 	  
 	  __syncthreads();
@@ -137,7 +138,7 @@ namespace swarm {
 
         ///Convert Gaussian mass back to solar units
         GPUAPI void convert_mass_to_solar()   {
-	  if ( is_in_body_component_grid() )
+	  if ( c == 0 )
 	    sys[b].mass() /= 2.959122082855911e-04;
 
 	  __syncthreads();

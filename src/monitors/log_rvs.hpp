@@ -86,10 +86,12 @@ struct log_rvs_params {
     rv_file.close();
     std::cerr << "# Read " << rv_times_host.size() << " RV observation times from " << filename << "\n";
 
+    /* DCH216 - TEMP FIX FOR COMPILE ISSUE FOR IRK2 INTEGRATOR
     try
       { thrust::sort(rv_times_host.begin(),rv_times_host.end()); }
     catch(thrust::system_error e)
       {      std::cerr << "Error sort: " << e.what() << std::endl;    }
+    */
 
     // Allocate & upload list of times onto device
     try
